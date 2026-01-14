@@ -406,14 +406,14 @@ class Page(Document):
         export_pages([self.id, *self.descendants])
 
     def export_body(self) -> None:
-        soup = BeautifulSoup(self.html, "html.parser")
+        soup = BeautifulSoup(self.html, "lxml")
         save_file(
             settings.export.output_path
             / self.export_path.parent
             / f"{self.export_path.stem}_body_view.html",
             str(soup.prettify()),
         )
-        soup = BeautifulSoup(self.body_export, "html.parser")
+        soup = BeautifulSoup(self.body_export, "lxml")
         save_file(
             settings.export.output_path
             / self.export_path.parent
@@ -566,7 +566,11 @@ class Page(Document):
 
         @property
         def markdown(self) -> str:
-            md_body = self.convert(self.page.html)
+            try:
+                md_body = self.convert(self.page.html)
+            except RecursionError:
+                print(f"⚠️  RecursionError while converting page {self.page.id} ('{self.page.title}') to markdown. Skipping page content.")
+                md_body = f"\n> **Error**: Could not convert this page due to complex HTML structure.\n> Page ID: {self.page.id}\n"
             markdown = f"{self.front_matter}\n"
             if settings.export.page_breadcrumbs:
                 markdown += f"{self.breadcrumbs}\n"
@@ -724,7 +728,7 @@ class Page(Document):
             </table>"""
 
             return (
-                f"\n\n{self.convert_table(BeautifulSoup(html, 'html.parser'), text, parent_tags)}\n"
+                f"\n\n{self.convert_table(BeautifulSoup(html, 'lxml'), text, parent_tags)}\n"
             )
 
         def convert_column_layout(
@@ -737,10 +741,10 @@ class Page(Document):
 
             html = f"<table><tr>{''.join([f'<td>{cell!s}</td>' for cell in cells])}</tr></table>"
 
-            return self.convert_table(BeautifulSoup(html, "html.parser"), text, parent_tags)
+            return self.convert_table(BeautifulSoup(html, "lxml"), text, parent_tags)
 
         def convert_jira_table(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
-            jira_tables = BeautifulSoup(self.page.body_export, "html.parser").find_all(
+            jira_tables = BeautifulSoup(self.page.body_export, "lxml").find_all(
                 "div", {"class": "jira-table"}
             )
 
@@ -755,7 +759,7 @@ class Page(Document):
             return self.process_tag(jira_tables[0], parent_tags)
 
         def convert_toc(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
-            tocs = BeautifulSoup(self.page.body_export, "html.parser").find_all(
+            tocs = BeautifulSoup(self.page.body_export, "lxml").find_all(
                 "div", {"class": "toc-macro"}
             )
 
@@ -814,10 +818,15 @@ class Page(Document):
             if "user-mention" in str(el.get("class")):
                 return self.convert_user_mention(el, text, parent_tags)
             if "createpage.action" in str(el.get("href")) or "createlink" in str(el.get("class")):
-                if fallback := BeautifulSoup(self.page.editor2, "html.parser").find(
-                    "a", string=text
-                ):
-                    return self.convert_a(fallback, text, parent_tags)  # type: ignore -
+                # Skip fallback search for very long strings to avoid recursion issues
+                if len(text) < 500:
+                    try:
+                        if fallback := BeautifulSoup(self.page.editor2, "lxml").find(
+                            "a", string=text
+                        ):
+                            return self.convert_a(fallback, text, parent_tags)  # type: ignore -
+                    except RecursionError:
+                        print(f"⚠️  RecursionError while processing link in page {self.page.id} ('{self.page.title[:50]}...'), skipping fallback link resolution")
                 return f"[[{text}]]"
             if "page" in str(el.get("data-linked-resource-type")):
                 page_id = str(el.get("data-linked-resource-id", ""))
@@ -990,7 +999,7 @@ class Page(Document):
             data_cql = el.get("data-cql")
             if not data_cql:
                 return ""
-            soup = BeautifulSoup(self.page.body_export, "html.parser")
+            soup = BeautifulSoup(self.page.body_export, "lxml")
             table = soup.find("table", {"data-cql": data_cql})
             if not table:
                 return ""
