@@ -27,6 +27,7 @@ from bs4 import Tag
 from markdownify import ATX
 from markdownify import MarkdownConverter
 from pydantic import BaseModel
+from pydantic import ValidationError
 from requests import HTTPError
 from tqdm import tqdm
 
@@ -161,14 +162,19 @@ class Space(BaseModel):
     key: str
     name: str
     description: str
-    homepage: int
+    homepage: int | None
 
     @property
     def pages(self) -> list[int]:
+        if self.homepage is None:
+            return []
         homepage = Page.from_id(self.homepage)
         return [self.homepage, *homepage.descendants]
 
     def export(self) -> None:
+        if not self.pages:
+            print(f"⚠️  Space {self.key} has no homepage (possibly archived), skipping export.")
+            return
         export_pages(self.pages)
 
     @classmethod
@@ -183,9 +189,19 @@ class Space(BaseModel):
     @classmethod
     @functools.lru_cache(maxsize=100)
     def from_key(cls, space_key: str) -> "Space":
-        return cls.from_json(
-            cast("JsonResponse", confluence.get_space(space_key, expand="homepage"))
-        )
+        try:
+            return cls.from_json(
+                cast("JsonResponse", confluence.get_space(space_key, expand="homepage"))
+            )
+        except (ApiError, HTTPError, ValidationError) as e:
+            logger.warning(f"Could not access space with key {space_key}: {e}")
+            # Return a minimal space object with error information
+            return cls(
+                key=space_key,
+                name=f"Space {space_key} (unavailable)",
+                description="",
+                homepage=None,
+            )
 
 
 class Label(BaseModel):
@@ -508,13 +524,13 @@ class Page(Document):
                     ),
                 )
             )
-        except (ApiError, HTTPError):
-            logger.warning(f"Could not access page with ID {page_id}")
+        except (ApiError, HTTPError, ValidationError) as e:
+            logger.warning(f"Could not access page with ID {page_id}: {e}")
             # Return a minimal page object with error information
             return cls(
                 id=page_id,
                 title="Page not accessible",
-                space=Space(key="", name="", description="", homepage=0),
+                space=Space(key="", name="", description="", homepage=None),
                 body="",
                 body_export="",
                 editor2="",
@@ -850,10 +866,15 @@ class Page(Document):
                 msg = "Page link does not have valid page_id."
                 raise ValueError(msg)
 
-            page = Page.from_id(page_id)
-            page_path = self._get_path_for_href(page.export_path, settings.export.page_href)
-
-            return f"[{page.title}]({page_path.replace(' ', '%20')})"
+            try:
+                page = Page.from_id(page_id)
+                page_path = self._get_path_for_href(page.export_path, settings.export.page_href)
+                return f"[{page.title}]({page_path.replace(' ', '%20')})"
+            except Exception as e:
+                # Handle cases where the page or its space might be archived or inaccessible
+                print(f"⚠️  Warning: Could not resolve page link for page ID {page_id}: {e}")
+                # Return a placeholder link with the page ID
+                return f"[Page {page_id} (unavailable)]({page_id})"
 
         def convert_attachment_link(
             self, el: BeautifulSoup, text: str, parent_tags: list[str]
