@@ -521,7 +521,7 @@ class Page(Document):
             return cls(
                 id=page_id,
                 title="Page not accessible",
-                space=Space(key="", name="", description="", homepage=0),
+                space=Space(key="", name="", description="", homepage=None),
                 body="",
                 body_export="",
                 editor2="",
@@ -856,18 +856,24 @@ class Page(Document):
                 msg = "Page link does not have valid page_id."
                 raise ValueError(msg)
 
-            page = Page.from_id(page_id)
+            try:
+                page = Page.from_id(page_id)
 
-            if page.title == "Page not accessible":
-                logger.warning(
-                    f"Confluence page link (ID: {page_id}) is not accessible, "
-                    f"referenced from page '{self.page.title}' (ID: {self.page.id})"
-                )
-                return f"[Page not accessible (ID: {page_id})]"
+                if page.title == "Page not accessible":
+                    logger.warning(
+                        f"Confluence page link (ID: {page_id}) is not accessible, "
+                        f"referenced from page '{self.page.title}' (ID: {self.page.id})"
+                    )
+                    return f"[Page not accessible (ID: {page_id})]"
 
-            page_path = self._get_path_for_href(page.export_path, settings.export.page_href)
+                page_path = self._get_path_for_href(page.export_path, settings.export.page_href)
 
-            return f"[{page.title}]({page_path.replace(' ', '%20')})"
+                return f"[{page.title}]({page_path.replace(' ', '%20')})"
+            except Exception as e:
+                # Handle cases where the page or its space might be archived or inaccessible
+                print(f"Could not resolve page link for page ID {page_id}: {e}")
+                # Return a placeholder link with the page ID
+                return f"[Page {page_id} (unavailable)]({page_id})"
 
         def convert_attachment_link(
             self, el: BeautifulSoup, text: str, parent_tags: list[str]
